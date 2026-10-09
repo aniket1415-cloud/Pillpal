@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Pillpal</title>
+<meta name="description" content="Scan, verify and remember your medicines." />
+<meta name="theme-color" content="#0F2E3D" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pillpal" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="icon" href="icons/icon-192.png" />
+<style>
+  :root{
+    --navy:#0F2E3D;
+    --navy-2:#153B4D;
+    --teal:#2AA9A0;
+    --teal-dark:#1C7A73;
+    --mint-bg:#E7F5F3;
+    --coral:#E8594B;
+    --coral-bg:#FBE7E4;
+    --amber:#C9821A;
+    --amber-bg:#FBEEDA;
+    --green:#1B8A5A;
+    --green-bg:#E4F5EC;
+    --bg:#F5F7F6;
+    --card:#FFFFFF;
+    --ink:#12242A;
+    --muted:#66787A;
+    --border:#E1E7E6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  #app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:var(--bg);position:relative;}
+  header.top{background:var(--navy);color:#fff;padding:calc(env(safe-area-inset-top,0px) + 18px) 20px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5;}
+  header.top .logo{width:38px;height:38px;border-radius:11px;overflow:hidden;flex-shrink:0;}
+  header.top .logo img{width:100%;height:100%;object-fit:cover;display:block;}
+  header.top h1{font-size:18px;margin:0;font-weight:700;letter-spacing:0.2px;}
+  header.top p{font-size:12px;margin:1px 0 0;color:#B9D2CE;}
+  main{flex:1;padding:18px 18px 100px;}
+  .screen{display:none;}
+  .screen.active{display:block;animation:fade .18s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+
+  .stat-row{display:flex;gap:12px;margin-bottom:16px;}
+  .stat-card{flex:1;background:var(--card);border-radius:14px;padding:14px 16px;border:1px solid var(--border);}
+  .stat-card .label{font-size:12px;color:var(--muted);margin-bottom:4px;}
+  .stat-card .value{font-size:24px;font-weight:700;color:var(--navy);}
+
+  .panel{background:var(--card);border-radius:16px;padding:16px;border:1px solid var(--border);margin-bottom:16px;}
+  .panel .label{font-size:12px;color:var(--muted);margin-bottom:6px;}
+  .panel .big{font-size:16px;font-weight:600;color:var(--ink);}
+
+  button.primary{width:100%;background:var(--teal);color:#fff;border:none;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;}
+  button.primary:active{background:var(--teal-dark);}
+  button.ghost{width:100%;background:transparent;color:var(--navy);border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;font-size:14px;font-weight:600;cursor:pointer;}
+  button.small{background:none;border:none;color:var(--muted);cursor:pointer;padding:6px;}
+
+  .section-title{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:22px 0 10px;}
+  .section-title:first-child{margin-top:0;}
+
+  .scan-box{border:2px dashed #C7D6D3;border-radius:16px;padding:28px 16px;text-align:center;margin-bottom:16px;background:var(--card);}
+  .scan-box svg{width:36px;height:36px;color:#9BB0AD;margin-bottom:8px;}
+  .scan-box p{font-size:13px;color:var(--muted);margin:0;}
+
+  .scan-subtabs{display:flex;gap:6px;background:var(--mint-bg);border-radius:12px;padding:4px;margin-bottom:16px;}
+  .scan-subtabs button{flex:1;border:none;background:transparent;border-radius:9px;padding:9px 6px;font-size:12.5px;font-weight:700;color:var(--teal-dark);cursor:pointer;}
+  .scan-subtabs button.active{background:var(--card);color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,.08);}
+  #cameraInput,#galleryInput{display:none;}
+  #preview{width:100%;border-radius:14px;margin-bottom:12px;display:none;max-height:260px;object-fit:cover;}
+
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:5px 12px;border-radius:20px;white-space:nowrap;}
+  .badge.verified{background:var(--green-bg);color:var(--green);}
+  .badge.expired{background:var(--coral-bg);color:var(--coral);}
+  .badge.unverified{background:var(--amber-bg);color:var(--amber);}
+
+  .result-card{background:var(--card);border-radius:16px;padding:16px;border:1px solid var(--border);margin-top:14px;}
+  .result-card .row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;}
+  .result-card .name{font-size:16px;font-weight:700;}
+  .result-card .meta{font-size:13px;color:var(--muted);}
+  .result-card .ocr{font-size:12px;color:var(--muted);background:var(--bg);border-radius:8px;padding:8px 10px;margin-top:10px;max-height:70px;overflow:auto;}
+
+  .list-item{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:13px 14px;border:1px solid var(--border);margin-bottom:10px;}
+  .list-item .name{font-size:14px;font-weight:600;}
+  .list-item .meta{font-size:12px;color:var(--muted);margin-top:2px;}
+  .empty{font-size:13px;color:var(--muted);text-align:center;padding:24px 10px;}
+
+  .form input, .form select{width:100%;padding:12px 13px;border-radius:11px;border:1.5px solid var(--border);font-size:15px;margin-bottom:10px;background:var(--card);color:var(--ink);}
+  .form label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px;}
+  .form-row{display:flex;gap:10px;}
+  .form-row > div{flex:1;}
+  .error-text{font-size:12px;color:var(--coral);margin:-4px 0 10px;display:none;}
+
+  nav.bottom{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom,0px);z-index:10;}
+  nav.bottom .wrap{max-width:480px;margin:0 auto;display:flex;}
+  nav.bottom button{flex:1;background:none;border:none;padding:10px 0 8px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:var(--muted);cursor:pointer;}
+  nav.bottom button.active{color:var(--teal-dark);}
+  nav.bottom svg{width:22px;height:22px;}
+
+  .toast{position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:30px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:50;opacity:0;pointer-events:none;transition:opacity .25s;}
+  .toast.show{opacity:1;}
+
+  .install-banner{background:var(--mint-bg);border:1px solid #BFE3DE;border-radius:14px;padding:12px 14px;margin-bottom:16px;font-size:12.5px;color:var(--teal-dark);display:none;}
+  .install-banner.show{display:block;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="top">
+    <div class="logo">
+      <img src="icons/icon-192.png" alt="Pillpal logo" />
+    </div>
+    <div>
+      <h1>Pillpal</h1>
+      <p>Your medicine, verified and on time</p>
+    </div>
+  </header>
+
+  <main>
+
+    <section id="screen-home" class="screen active">
+      <div class="install-banner" id="installBanner">Add Pillpal to your home screen so it opens like a real app. Tap your browser's menu and choose "Add to Home Screen" or "Install app".</div>
+      <div class="stat-row">
+        <div class="stat-card"><div class="label">Verified medicines</div><div class="value" id="statVerified">0</div></div>
+        <div class="stat-card"><div class="label">Reminders set</div><div class="value" id="statReminders">0</div></div>
+      </div>
+      <div class="panel">
+        <div class="label">Next reminder</div>
+        <div class="big" id="nextReminder">No reminders set</div>
+      </div>
+      <button class="primary" onclick="goTo('scan')">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M4 8a2 2 0 012-2h1.5l1-1.5h7l1 1.5H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="13" r="3.2" stroke="#fff" stroke-width="1.8"/></svg>
+        Scan a medicine
+      </button>
+      <button class="ghost" id="signOutBtn" style="margin-top:12px;">Sign out</button>
+    </section>
+
+    <section id="screen-scan" class="screen">
+      <div class="scan-subtabs" id="scanSubtabs">
+        <button data-mode="camera" class="active">I have it now</button>
+        <button data-mode="gallery">Don't have it yet</button>
+      </div>
+      <div class="scan-box" id="scanBox">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h1.5l1-1.5h7l1 1.5H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.2" stroke="currentColor" stroke-width="1.6"/></svg>
+        <p id="scanBoxText">Take a clear, well-lit photo of the medicine label</p>
+      </div>
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" />
+      <input type="file" id="galleryInput" accept="image/*" />
+      <img id="preview" alt="Captured medicine label" />
+      <button class="primary" id="captureBtn">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M4 8a2 2 0 012-2h1.5l1-1.5h7l1 1.5H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="13" r="3.2" stroke="#fff" stroke-width="1.8"/></svg>
+        <span id="captureBtnText">Take photo</span>
+      </button>
+      <div id="scanStatus" style="font-size:13px;color:var(--muted);text-align:center;margin-top:10px;"></div>
+      <div id="scanResult"></div>
+    </section>
+
+    <section id="screen-remind" class="screen">
+      <div class="section-title">Your reminders</div>
+      <div id="remList"></div>
+      <div class="section-title">Add a reminder</div>
+      <div class="form panel">
+        <label for="remMed">Medicine name</label>
+        <input id="remMed" placeholder="e.g. Metformin 500mg" />
+        <div class="error-text" id="remError">Enter a medicine name first.</div>
+        <div class="form-row">
+          <div>
+            <label for="remTime">Time</label>
+            <input id="remTime" type="time" value="08:00" />
+          </div>
+          <div>
+            <label for="remFreq">Frequency</label>
+            <select id="remFreq">
+              <option>Once daily</option>
+              <option>Twice daily</option>
+              <option>Weekly</option>
+            </select>
+          </div>
+        </div>
+        <button class="primary" id="remAddBtn" style="margin-top:4px;">Add reminder</button>
+      </div>
+    </section>
+
+    <section id="screen-vault" class="screen">
+      <div class="section-title">Saved medicines</div>
+      <div id="vaultList"></div>
+    </section>
+
+  </main>
+
+  <nav class="bottom">
+    <div class="wrap">
+      <button data-tab="home" class="tab active">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 01-1 1h-4.5v-6h-5v6H5a1 1 0 01-1-1v-9.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        Home
+      </button>
+      <button data-tab="scan" class="tab">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h1.5l1-1.5h7l1 1.5H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.6"/></svg>
+        Scan
+      </button>
+      <button data-tab="remind" class="tab">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M6 17h12M8 17V10a4 4 0 118 0v7M10.5 20a1.5 1.5 0 003 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Reminders
+      </button>
+      <button data-tab="vault" class="tab">
+        <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.7"/></svg>
+        Vault
+      </button>
+    </div>
+  </nav>
+
+  <div id="authOverlay" style="position:fixed;inset:0;background:var(--bg);z-index:100;display:none;align-items:center;justify-content:center;padding:24px;">
+  <div class="form panel" style="width:100%;max-width:380px;margin:0;">
+    <h2 style="margin:0 0 4px;color:var(--navy);">Welcome to Pillpal</h2>
+    <p style="margin:0 0 14px;font-size:13px;color:var(--muted);">Sign in to keep your medicines and reminders safe across devices.</p>
+    <label for="authEmail">Email</label><input id="authEmail" type="email" autocomplete="email" />
+    <label for="authPass">Password (min 6 characters)</label><input id="authPass" type="password" autocomplete="current-password" />
+    <div class="error-text" id="authError"></div>
+    <button class="primary" id="signInBtn">Sign in</button>
+    <button class="ghost" id="signUpBtn" style="margin-top:8px;">Create account</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = "https://iauczynjaqjecjeszwey.supabase.co/rest/v1/";
+const SUPABASE_KEY = "sb_publishable_0k0lspDihSld1g7GzhQEVQ_BtGOiEJC";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const esc = t => String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const DB = [
+  { name: "Paracetamol 500mg", keywords: ["paracetamol", "acetaminophen"] },
+  { name: "Metformin 500mg", keywords: ["metformin"] },
+  { name: "Amoxicillin 250mg", keywords: ["amoxicillin", "amoxycillin"] },
+  { name: "Atorvastatin 10mg", keywords: ["atorvastatin"] },
+  { name: "Cetirizine 10mg", keywords: ["cetirizine"] },
+  { name: "Ibuprofen 400mg", keywords: ["ibuprofen"] }
+];
+
+let vault = [];
+let reminders = [];
+let currentScan = null;
+let firedToday = {};
+
+function save() {}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function goTo(tab) {
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  document.getElementById("screen-" + tab).classList.add("active");
+  document.querySelectorAll("nav.bottom .tab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+}
+document.querySelectorAll("nav.bottom .tab").forEach(b => b.onclick = () => goTo(b.dataset.tab));
+
+function badgeHtml(status) {
+  const label = status === "verified" ? "Name matched, in date" : status === "expired" ? "Expired" : "Not found in database";
+  return '<span class="badge ' + status + '">' + label + "</span>";
+}
+
+function renderHome() {
+  document.getElementById("statVerified").textContent = vault.filter(v => v.status === "verified").length;
+  document.getElementById("statReminders").textContent = reminders.length;
+  const sorted = [...reminders].sort((a, b) => a.time.localeCompare(b.time));
+  document.getElementById("nextReminder").textContent = sorted.length
+    ? sorted[0].medicine + " at " + sorted[0].time
+    : "No reminders set";
+}
+
+function renderVault() {
+  const el = document.getElementById("vaultList");
+  if (!vault.length) {
+    el.innerHTML = '<div class="empty">No saved medicines yet. Scan one to add it here.</div>';
+    return;
+  }
+  el.innerHTML = vault.map((v, i) =>
+    '<div class="list-item"><div><div class="name">' + esc(v.name) + '</div><div class="meta">Batch ' + esc(v.batch) + " &middot; Expires " + esc(v.expiry) + '</div></div><div style="display:flex;align-items:center;gap:8px;">' + badgeHtml(v.status) +
+    '<button class="small" onclick="deleteVault(' + i + ')" aria-label="Remove"><svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div></div>'
+  ).join("");
+}
+async function deleteVault(i) {
+  const { error } = await sb.from("medicines").delete().eq("id", vault[i].id);
+  if (error) return showToast("Could not delete");
+  vault.splice(i, 1); renderVault(); renderHome();
+}
+
+function renderReminders() {
+  const el = document.getElementById("remList");
+  if (!reminders.length) {
+    el.innerHTML = '<div class="empty">No reminders yet.</div>';
+    return;
+  }
+  el.innerHTML = reminders.map((r, i) =>
+    '<div class="list-item"><div><div class="name">' + esc(r.medicine) + '</div><div class="meta">' + r.time + " &middot; " + r.freq + '</div></div><button class="small" onclick="deleteReminder(' + i + ')" aria-label="Delete"><svg viewBox="0 0 24 24" width="17" height="17" fill="none"><path d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>'
+  ).join("");
+}
+async function deleteReminder(i) {
+  const { error } = await sb.from("reminders").delete().eq("id", reminders[i].id);
+  if (error) return showToast("Could not delete");
+  reminders.splice(i, 1); renderReminders(); renderHome();
+}
+
+document.getElementById("remAddBtn").onclick = async function () {
+  const med = document.getElementById("remMed").value.trim();
+  const err = document.getElementById("remError");
+  if (!med) { err.style.display = "block"; return; }
+  err.style.display = "none";
+  const time = document.getElementById("remTime").value || "08:00";
+  const freq = document.getElementById("remFreq").value;
+  const { data, error } = await sb.from("reminders").insert({ medicine_name: med, time, frequency: freq }).select().single();
+  if (error) return showToast("Could not save reminder");
+  reminders.push({ id: data.id, medicine: med, time, freq });
+  document.getElementById("remMed").value = "";
+  save(); renderReminders(); renderHome();
+  showToast("Reminder added");
+};
+
+function parseExpiry(text) {
+  const m = text.match(/(0[1-9]|1[0-2])\s*[\/\-\.]\s*(20\d{2})/);
+  if (!m) return null;
+  const month = parseInt(m[1], 10);
+  const year = parseInt(m[2], 10);
+  return { label: m[1] + "/" + m[2], date: new Date(year, month, 0) };
+}
+
+function matchMedicine(text) {
+  const lower = text.toLowerCase();
+  for (const entry of DB) {
+    if (entry.keywords.some(k => lower.includes(k))) return entry;
+  }
+  return null;
+}
+
+function extractBatch(text) {
+  const m = text.match(/\b([A-Z]{1,3}\d{3,6})\b/);
+  return m ? m[1] : "unknown";
+}
+
+function runVerification(ocrText) {
+  const matched = matchMedicine(ocrText);
+  const expiry = parseExpiry(ocrText);
+  const batch = extractBatch(ocrText.toUpperCase());
+  let status = "unverified";
+  let name = matched ? matched.name : "Unrecognised label";
+  if (expiry && expiry.date < new Date()) {
+    status = "expired";
+  } else if (matched) {
+    status = "verified";
+  }
+  return { name, batch, expiry: expiry ? expiry.label : "not detected", status, ocrText };
+}
+
+function renderScanResult(r) {
+  const el = document.getElementById("scanResult");
+  el.innerHTML =
+    '<div class="result-card"><div class="row"><div class="name">' + esc(r.name) + "</div>" + badgeHtml(r.status) + '</div>' +
+    '<div class="meta">Batch ' + r.batch + " &middot; Expires " + r.expiry + '</div>' +
+    '<div class="ocr">Detected text: ' + esc(r.ocrText.trim().slice(0, 220) || "none") + '</div>' +
+    '<button class="primary" style="margin-top:12px;" id="saveVaultBtn">Save to vault</button></div>';
+  document.getElementById("saveVaultBtn").onclick = async function () {
+    const { data, error } = await sb.from("medicines").insert({ name: r.name, batch: r.batch, expiry: r.expiry, status: r.status }).select().single();
+    if (error) return showToast("Could not save");
+    vault.push({ id: data.id, name: r.name, batch: r.batch, expiry: r.expiry, status: r.status });
+    renderVault(); renderHome();
+    showToast("Saved to vault");
+  };
+}
+
+const cameraInput = document.getElementById("cameraInput");
+const galleryInput = document.getElementById("galleryInput");
+const preview = document.getElementById("preview");
+const captureBtn = document.getElementById("captureBtn");
+const scanStatus = document.getElementById("scanStatus");
+const scanBoxText = document.getElementById("scanBoxText");
+const captureBtnText = document.getElementById("captureBtnText");
+
+let scanMode = "camera";
+document.querySelectorAll("#scanSubtabs button").forEach(btn => btn.onclick = () => {
+  scanMode = btn.dataset.mode;
+  document.querySelectorAll("#scanSubtabs button").forEach(b => b.classList.toggle("active", b === btn));
+  if (scanMode === "gallery") {
+    scanBoxText.textContent = "Don't have the medicine on hand? Upload a photo of the label from your gallery instead.";
+    captureBtnText.textContent = "Upload photo";
+  } else {
+    scanBoxText.textContent = "Take a clear, well-lit photo of the medicine label";
+    captureBtnText.textContent = "Take photo";
+  }
+});
+
+captureBtn.onclick = () => (scanMode === "gallery" ? galleryInput : cameraInput).click();
+
+function handleScanFile(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  preview.src = url;
+  preview.style.display = "block";
+  document.getElementById("scanBox").style.display = "none";
+  document.getElementById("scanResult").innerHTML = "";
+  scanStatus.textContent = "Reading the label...";
+  if (typeof Tesseract === "undefined") {
+    scanStatus.textContent = "OCR needs an internet connection the first time it loads. Check your connection and try again.";
+    return;
+  }
+  Tesseract.recognize(file, "eng")
+    .then(({ data: { text } }) => {
+      scanStatus.textContent = "";
+      const result = runVerification(text || "");
+      currentScan = result;
+      renderScanResult(result);
+    })
+    .catch(() => {
+      scanStatus.textContent = "Could not read the label. Try a clearer, closer photo.";
+    });
+}
+
+cameraInput.onchange = function () { handleScanFile(this.files[0]); };
+galleryInput.onchange = function () { handleScanFile(this.files[0]); };
+
+function checkReminders() {
+  const now = new Date();
+  const hhmm = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+  const todayKey = now.toDateString();
+  reminders.forEach((r, i) => {
+    const key = i + "_" + todayKey + "_" + r.time;
+    if (r.time === hhmm && !firedToday[key]) {
+      firedToday[key] = true;
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Pillpal reminder", { body: r.medicine + " - " + r.freq, icon: "icons/icon-192.png" });
+      } else {
+        showToast("Reminder: " + r.medicine);
+      }
+    }
+  });
+}
+setInterval(checkReminders, 20000);
+
+if ("Notification" in window && Notification.permission === "default") {
+  document.addEventListener("click", function requestOnce() {
+    Notification.requestPermission();
+    document.removeEventListener("click", requestOnce);
+  }, { once: true });
+}
+
+if (!window.matchMedia("(display-mode: standalone)").matches) {
+  document.getElementById("installBanner").classList.add("show");
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  });
+}
+
+const overlay = document.getElementById("authOverlay");
+const authError = document.getElementById("authError");
+function authFail(msg) { authError.textContent = msg; authError.style.display = "block"; }
+
+async function loadCloud() {
+  const [m, r] = await Promise.all([
+    sb.from("medicines").select("*").order("created_at"),
+    sb.from("reminders").select("*").order("time")
+  ]);
+  vault = (m.data || []).map(x => ({ id: x.id, name: x.name, batch: x.batch, expiry: x.expiry, status: x.status }));
+  reminders = (r.data || []).map(x => ({ id: x.id, medicine: x.medicine_name, time: x.time, freq: x.frequency }));
+  renderHome(); renderReminders(); renderVault();
+}
+async function enterApp() { overlay.style.display = "none"; await loadCloud(); }
+
+async function authDo(kind) {
+  authError.style.display = "none";
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPass").value;
+  if (!email || password.length < 6) return authFail("Enter an email and a password of 6+ characters.");
+  const { data, error } = kind === "up"
+    ? await sb.auth.signUp({ email, password })
+    : await sb.auth.signInWithPassword({ email, password });
+  if (error) return authFail(error.message);
+  if (!data.session) return authFail("Account created. Check your email to confirm, then sign in.");
+  enterApp();
+}
+document.getElementById("signInBtn").onclick = () => authDo("in");
+document.getElementById("signUpBtn").onclick = () => authDo("up");
+document.getElementById("signOutBtn").onclick = async () => {
+  await sb.auth.signOut(); vault = []; reminders = [];
+  renderHome(); renderReminders(); renderVault(); overlay.style.display = "flex";
+};
+
+(async function boot() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) enterApp(); else overlay.style.display = "flex";
+})();
+</script>
+</body>
+</html>

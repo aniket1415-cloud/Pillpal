@@ -504,5 +504,62 @@ document.getElementById("signOutBtn").onclick = async () => {
 })();
 </script>
   <script src="scan-upgrade.js?v=1"></script> 
+<script>
+async function processMedicineScan(imageElement) {
+    document.getElementById('scan-warning').style.display = 'none';
+    try {
+        const result = await Tesseract.recognize(imageElement, 'eng');
+        const scannedData = parseMedicineData(result.data.text);
+        displayResults(scannedData);
+    } catch (error) {
+        console.error(error);
+        alert("Scan failed. Please try again in brighter light.");
+    }
+}
+
+function parseMedicineData(rawText) {
+    let text = rawText.toUpperCase();
+    text = text.replace(/FEA/g, 'FEB').replace(/\)UL|1UL|0UL|£%P/g, 'JUL');
+
+    let medName = "Unrecognised label";
+    let isManualName = false;
+    
+    if (text.includes("PARACIP") || text.includes("PARACETAMOL") || text.includes("DOLO")) {
+        medName = "Paracetamol";
+    } else if (text.includes("PAN-D") || text.includes("PAN 40")) {
+        medName = "Pantoprazole + Domperidone";
+    } else {
+        isManualName = true;
+    }
+
+    const batchMatch = text.match(/(?:B\.?NO\.?|BATCH|B\.?N\.?)[\s:]*([A-Z0-9]+)/);
+    const batchNo = batchMatch ? batchMatch[1] : "Not found";
+
+    const datesMatch = [...text.matchAll(/((?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|0[1-9]|1[0-2])[\/\.\-\s:]*(?:20)?\d{2})\b/g)];
+    
+    let mfgDate = "Not found";
+    let expDate = "Not found";
+
+    if (datesMatch.length >= 2) {
+        mfgDate = datesMatch[0][1].replace(/[\.\-\s:]+/g, '/');
+        expDate = datesMatch[1][1].replace(/[\.\-\s:]+/g, '/');
+        
+        if (mfgDate.length <= 6) mfgDate = mfgDate.replace(/\/(\d{2})$/, '/20$1');
+        if (expDate.length <= 6) expDate = expDate.replace(/\/(\d{2})$/, '/20$1');
+    }
+
+    return { name: medName, batch: batchNo, mfg: mfgDate, exp: expDate, manual: isManualName, raw: text };
+}
+
+function displayResults(data) {
+    if(data.manual) {
+        document.getElementById('manual-name-entry').style.display = 'block';
+    }
+    document.getElementById('med-name').value = data.manual ? "" : data.name;
+    document.getElementById('med-batch').value = data.batch;
+    document.getElementById('med-mfg').value = data.mfg;
+    document.getElementById('med-exp').value = data.exp;
+}
+</script>
 </body>
 </html>

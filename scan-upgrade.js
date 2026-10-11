@@ -111,9 +111,9 @@ function parseDates(text) {
 }
 function parseExpiry(text) { return parseDates(text).exp; }
 
-async function prepImage(file) {
+async function prepImage(file, maxScale = 2, maxDim = 2000) {
   const img = await createImageBitmap(file);
-  const scale = Math.min(2, 2000 / Math.max(img.width, img.height));
+  const scale = Math.min(maxScale, maxDim / Math.max(img.width, img.height));
   const c = document.createElement("canvas");
   c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
   const ctx = c.getContext("2d");
@@ -130,7 +130,16 @@ async function prepImage(file) {
   return c;
 }
 
-function handleScanFile(file) {
+async function ocrOnce(src, sparse) {
+  if (!sparse) return (await Tesseract.recognize(src, "eng")).data.text;
+  const w = await Tesseract.createWorker("eng");     // sparse mode finds scattered small text (dates on packs)
+  try {
+    await w.setParameters({ tessedit_pageseg_mode: "11" });
+    return (await w.recognize(src)).data.text;
+  } finally { await w.terminate(); }
+}
+
+async function handleScanFile(file) {
   if (!file) return;
   preview.src = URL.createObjectURL(file);
   preview.style.display = "block";
@@ -141,17 +150,24 @@ function handleScanFile(file) {
     scanStatus.textContent = "OCR needs an internet connection the first time it loads. Check your connection and try again.";
     return;
   }
-  prepImage(file).catch(() => file)
-    .then(src => Tesseract.recognize(src, "eng"))
-    .then(({ data: { text } }) => {
-      scanStatus.textContent = "";
-      const result = runVerification(text || "");
-      currentScan = result;
-      renderScanResult(result);
-    })
-    .catch(() => { scanStatus.textContent = "Could not read the label. Try a clearer, closer photo."; });
+  try {
+    const c1 = await prepImage(file).catch(() => file);
+    let text = await ocrOnce(c1, false);
+    if (!parseDates(text).exp) {
+      scanStatus.textContent = "Looking closer for dates...";
+      try {
+        const c2 = await prepImage(file, 3, 3200).catch(() => file);
+        text += "\n" + await ocrOnce(c2, true);
+      } catch (e) { /* keep first-pass text */ }
+    }
+    scanStatus.textContent = "";
+    const result = runVerification(text || "");
+    currentScan = result;
+    renderScanResult(result);
+  } catch (e) {
+    scanStatus.textContent = "Could not read the label. Try a clearer, closer photo.";
+  }
 }
-
 
 // ---------- Result card, vault and verification (adds manufactured date + "Show scanned text") ----------
 const _style = document.createElement("style");
@@ -182,16 +198,38 @@ function runVerification(ocrText) {
   };
 }
 
+const toInput = l => { const m = /^(\d{2})\/(\d{4})$/.exec(l); return m ? m[2] + "-" + m[1] : ""; };
+const fromInput = v => { const m = /^(\d{4})-(\d{2})$/.exec(v); return m ? m[2] + "/" + m[1] : "not detected"; };
+function statusFor(r) {
+  const m = /^(\d{2})\/(\d{4})$/.exec(r.expiry);
+  const exp = m ? new Date(+m[2], +m[1], 0) : null;
+  const matched = r.name !== "Unrecognised label";
+  if (exp && exp < new Date()) return "expired";
+  if (matched) return exp ? "verified" : "noexpiry";
+  return "unverified";
+}
+
 function renderScanResult(r) {
   const el = document.getElementById("scanResult");
+  const wasOpen = document.getElementById("ocrBox") && document.getElementById("ocrBox").style.display === "block";
+  const missing = r.mfg === "not detected" || r.expiry === "not detected";
   el.innerHTML =
     '<div class="result-card"><div class="row"><div class="name">' + esc(r.name) + "</div>" + badgeHtml(r.status) + "</div>" +
-    '<div class="meta">Manufactured: <b>' + esc(r.mfg) + "</b></div>" +
-    '<div class="meta">Expires: <b>' + esc(r.expiry) + "</b></div>" +
     '<div class="meta">Batch: ' + esc(r.batch) + "</div>" +
-    '<button class="ghost" id="toggleOcrBtn" style="margin-top:12px;">Show scanned text</button>' +
-    '<div class="ocr" id="ocrBox" style="display:none;">' + esc(r.ocrText.trim().slice(0, 400) || "none") + "</div>" +
+    (missing ? '<div class="meta" style="margin:10px 0 6px;color:var(--amber);">Dates not fully read from the photo. Enter them from the pack:</div>' : '<div class="meta" style="margin:10px 0 6px;">Dates (tap to correct if wrong):</div>') +
+    '<div class="form-row form"><div><label for="mfgIn">Manufactured</label><input type="month" id="mfgIn" value="' + toInput(r.mfg) + '" /></div>' +
+    '<div><label for="expIn">Expires</label><input type="month" id="expIn" value="' + toInput(r.expiry) + '" /></div></div>' +
+    '<button class="ghost" id="toggleOcrBtn">' + (wasOpen ? "Hide scanned text" : "Show scanned text") + "</button>" +
+    '<div class="ocr" id="ocrBox" style="display:' + (wasOpen ? "block" : "none") + ';">' + esc(r.ocrText.trim().slice(0, 400) || "none") + "</div>" +
     '<button class="primary" style="margin-top:12px;" id="saveVaultBtn">Save to vault</button></div>';
+  const onDate = () => {
+    r.mfg = fromInput(document.getElementById("mfgIn").value);
+    r.expiry = fromInput(document.getElementById("expIn").value);
+    r.status = statusFor(r);
+    renderScanResult(r);
+  };
+  document.getElementById("mfgIn").onchange = onDate;
+  document.getElementById("expIn").onchange = onDate;
   document.getElementById("toggleOcrBtn").onclick = function () {
     const box = document.getElementById("ocrBox");
     const show = box.style.display === "none";
@@ -201,10 +239,7 @@ function renderScanResult(r) {
   document.getElementById("saveVaultBtn").onclick = async function () {
     const row = { name: r.name, batch: r.batch, expiry: r.expiry, mfg: r.mfg, status: r.status };
     let res = await sb.from("medicines").insert(row).select().single();
-    if (res.error) {                                   // fallback if the "mfg" column hasn't been added yet
-      delete row.mfg;
-      res = await sb.from("medicines").insert(row).select().single();
-    }
+    if (res.error) { delete row.mfg; res = await sb.from("medicines").insert(row).select().single(); }
     if (res.error) return showToast("Could not save");
     vault.push({ id: res.data.id, name: r.name, batch: r.batch, expiry: r.expiry, mfg: res.data.mfg || r.mfg, status: r.status });
     renderVault(); renderHome();

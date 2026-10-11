@@ -13,6 +13,7 @@ const MED_LIST = [
   ["Cetirizine", ["cetirizine", "cetzine", "okacet", "alerid"]],
   ["Levocetirizine", ["levocetirizine", "levocet", "xyzal"]],
   ["Azithromycin", ["azithromycin", "azithral", "azee", "zithromax"]],
+  ["Pantoprazole + Domperidone", [], /\bPAN[\s\-]?D\b/i],
   ["Pantoprazole", ["pantoprazole", "pantocid", "pantop"]],
   ["Omeprazole", ["omeprazole", "omez", "prilosec"]],
   ["Rabeprazole", ["rabeprazole", "razo"]],
@@ -68,8 +69,8 @@ function fuzzyHas(letters, kw) {
 function matchMedicine(text) {
   const letters = text.toLowerCase().replace(/[^a-z]/g, "");
   const mg = text.match(/(\d{2,4})\s*(mg|mcg)\b/i);
-  for (const [name, kws] of MED_LIST) {
-    if (kws.some(k => fuzzyHas(letters, k)))
+  for (const [name, kws, rx] of MED_LIST) {
+    if ((rx && rx.test(text)) || kws.some(k => fuzzyHas(letters, k)))
       return { name: name + (mg ? " " + mg[1] + mg[2].toLowerCase() : "") };
   }
   return null;
@@ -80,39 +81,72 @@ function fmtDate(y, mo) { return { label: String(mo).padStart(2, "0") + "/" + y,
 
 // Finds manufacture and expiry dates. Uses EXP / MFG words when readable, otherwise
 // earlier date on the pack = manufactured, later date = expiry.
+const MON_NAMES = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+// Finds manufacture and expiry dates. Uses EXP / MFG words when readable, otherwise
+// earlier date on the pack = manufactured, later date = expiry. Never guesses from unreadable years.
 function parseDates(text) {
-  const t = text.toUpperCase(); let found = [];
+  let t = text.toUpperCase();
+  t = t.replace(/\b(FE[RA8H]|JAM|AUC|SFP|DFC)(?=[\s.:\/\-]*'?\d)/g,
+    w => ({ FER: "FEB", FEA: "FEB", FE8: "FEB", FEH: "FEB", JAM: "JAN", AUC: "AUG", SFP: "SEP", DFC: "DEC" })[w]);   // common OCR slips
+  let found = [];
+  const tagAt = i => {
+    const before = t.slice(Math.max(0, i - 12), i);
+    return /EXP|USE BEFORE|BEST BEFORE/.test(before) ? "exp" : /MFG|MFD|MF\.|MANUF/.test(before) ? "mfg" : "";
+  };
   const add = (m, y, mo) => {
     if (y < 100) { if (y < 15 || y > 45) return; y += 2000; }
     if (y < 2015 || y > 2060 || !mo) return;
-    const before = t.slice(Math.max(0, m.index - 12), m.index);
-    const tag = /EXP|USE BEFORE|BEST BEFORE/.test(before) ? "exp" : /MFG|MFD|MF\.|MANUF/.test(before) ? "mfg" : "";
-    found.push({ y, mo, tag, key: y * 12 + mo });
+    found.push({ y, mo, tag: tagAt(m.index), key: y * 12 + mo });
   };
   let m;
   const r1 = /(0[1-9]|1[0-2])\s*[\/\-\.]\s*(20\d{2}|\d{2})\b/g;
   while ((m = r1.exec(t))) add(m, +m[2], +m[1]);
   const r2 = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[\s.:\/\-]*'?(20\d{2}|\d{2})\b/g;
   while ((m = r2.exec(t))) add(m, +m[2], MONTHS[m[1]]);
-  if (!found.length) return { mfg: null, exp: null, unsure: null };
-  const uniq = new Map();                                  // same date seen in several passes counts once
-  for (const f of found) { const e = uniq.get(f.key); if (!e) uniq.set(f.key, f); else if (!e.tag && f.tag) e.tag = f.tag; }
-  found = [...uniq.values()].sort((a, b) => a.key - b.key);
-  let unsure = null;
-  let exp = found.find(f => f.tag === "exp");
-  let mfg = found.find(f => f.tag === "mfg");
-  if (!exp && !mfg) {
-    if (found.length >= 2) { mfg = found[0]; exp = found[found.length - 1]; }
-    else unsure = found[0];                               // one date, no EXP/MFG label: do not guess
-  } else if (!exp && found.length >= 2) {
-    exp = found.filter(f => f !== mfg).pop();
-  } else if (!mfg && found.length >= 2) {
-    mfg = found.filter(f => f !== exp)[0];
+  // an EXP line whose year is cut off, e.g. "EXP. JAN.202?"
+  let partialExp = null;
+  const rp = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[\s.:\/\-]*'?20\d?(?!\d)/g;
+  while ((m = rp.exec(t))) if (tagAt(m.index) === "exp") partialExp = m[1];
+
+  let mfg = null, exp = null, unsure = null, note = "";
+  const lab = f => MON_NAMES[f.mo] + " " + f.y;
+  if (found.length) {
+    const uniq = new Map();                                // same date seen in several passes counts once
+    for (const f of found) { const e = uniq.get(f.key); if (!e) uniq.set(f.key, f); else if (!e.tag && f.tag) e.tag = f.tag; }
+    found = [...uniq.values()].sort((a, b) => a.key - b.key);
+    exp = found.find(f => f.tag === "exp");
+    mfg = found.find(f => f.tag === "mfg");
+    if (!exp && !mfg) {
+      if (found.length >= 2) { mfg = found[0]; exp = found[found.length - 1]; }
+      else unsure = found[0];                              // one date, no EXP/MFG label: do not guess
+    } else if (!exp && found.length >= 2) {
+      exp = found.filter(f => f !== mfg).pop();
+    } else if (!mfg && found.length >= 2) {
+      mfg = found.filter(f => f !== exp)[0];
+    }
+    if (mfg && exp && mfg.key >= exp.key) {                // expiry must come after manufacture
+      if (mfg.tag && exp.tag) {
+        note = "Read expiry as " + lab(exp) + ", which is not after the manufacture date (" + lab(mfg) + "). One is probably misread. Please check both.";
+        exp = null;
+      } else if (exp.tag) mfg = null;
+      else if (mfg.tag) exp = null;
+      else mfg = null;
+    }
   }
-  if (mfg && exp && mfg.key >= exp.key) mfg = null;
-  return { mfg: mfg ? fmtDate(mfg.y, mfg.mo) : null, exp: exp ? fmtDate(exp.y, exp.mo) : null, unsure: unsure ? fmtDate(unsure.y, unsure.mo) : null };
+  if (!note && exp && partialExp && partialExp === MON_NAMES[exp.mo]) note = "Please double-check the expiry year. It read inconsistently on the photo.";
+  if (!note && !exp && partialExp) note = "Expiry looks like " + partialExp + " but the year could not be read clearly. Please set it below.";
+  if (!note && unsure) note = "Found " + lab(unsure) + " on the pack but could not tell if it is the manufacture or expiry date. Please set both below.";
+  return { mfg: mfg ? fmtDate(mfg.y, mfg.mo) : null, exp: exp ? fmtDate(exp.y, exp.mo) : null, unsure: unsure ? fmtDate(unsure.y, unsure.mo) : null, note };
 }
 function parseExpiry(text) { return parseDates(text).exp; }
+
+function extractBatch(text) {
+  const t = text.toUpperCase();
+  let m = t.match(/\b(?:B\.?\s*NO|BATCH(?:\s*NO)?|B\.?\s*N\.?)\s*[.:\-]?\s*([A-Z0-9]{4,12})\b/);
+  if (m && /\d/.test(m[1])) return m[1];
+  m = t.match(/\b([A-Z]{1,3}\d{3,6})\b/);
+  return m ? m[1] : "unknown";
+}
 
 // Colour upscale only. (Grayscale/contrast-stretch made small foil print LESS readable in testing.)
 async function colorImage(file, scale) {
@@ -124,41 +158,88 @@ async function colorImage(file, scale) {
   return c;
 }
 
-// Several OCR passes with different image sizes / page modes; stops early once both dates are found.
-async function scanPasses(file) {
-  const plan = [[2, "6"], [3, "6"], [3, "11"], [2, "3"], [3, "3"]];
-  const texts = [];
-  const worker = await Tesseract.createWorker("eng");
-  try {
-    for (let i = 0; i < plan.length; i++) {
-      scanStatus.textContent = "Reading the label (" + (i + 1) + "/" + plan.length + ")...";
-      try {
-        const img = await colorImage(file, plan[i][0]);
-        await worker.setParameters({ tessedit_pageseg_mode: plan[i][1] });
-        const t = (await worker.recognize(img)).data.text || "";
-        texts.push(t);
-        const d = parseDates(texts.join("\n"));
-        if (d.exp && d.mfg && matchMedicine(texts.join(" "))) break;
-      } catch (e) { /* skip a failed pass */ }
-    }
-  } finally { await worker.terminate(); }
-  return texts;
+const matchAny = arr => { for (const t of arr) { const m = matchMedicine(t); if (m) return m; } return null; };
+
+async function rotatedImage(file, deg, scale) {
+  const img = await createImageBitmap(file);
+  const s = Math.min(scale, 3200 / Math.max(img.width, img.height));
+  const w = Math.round(img.width * s), h = Math.round(img.height * s);
+  const c = document.createElement("canvas"); c.width = h; c.height = w;
+  const ctx = c.getContext("2d");
+  if (deg === 90) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); } else { ctx.translate(0, w); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(img, 0, 0, w, h);
+  return c;
 }
 
-function buildResult(texts) {
-  let matched = null, batch = "unknown";
-  for (const t of texts) {
-    if (!matched) matched = matchMedicine(t);
-    if (batch === "unknown") batch = extractBatch(t.toUpperCase());
+// Dates are tiny print: read the photo in overlapping horizontal bands, bottom first, each enlarged.
+async function bandPass(file, worker, texts, onStep) {
+  const img = await createImageBitmap(file);
+  const bh = Math.round(img.height * 0.20), step = Math.round(img.height * 0.10);
+  const ys = [];
+  for (let y = img.height - bh; y >= 0; y -= step) ys.push(y);
+  if (ys[ys.length - 1] !== 0) ys.push(0);
+  const scale = Math.min(2, 4200 / img.width);
+  await worker.setParameters({ tessedit_pageseg_mode: "6" });
+  for (let i = 0; i < ys.length; i++) {
+    onStep("Zooming in on small print (" + (i + 1) + "/" + ys.length + ")...");
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale); c.height = Math.round(bh * scale);
+    c.getContext("2d").drawImage(img, 0, ys[i], img.width, bh, 0, 0, c.width, c.height);
+    texts.push((await worker.recognize(c)).data.text || "");
+    const d = parseDates(texts.join("\n"));
+    if (d.exp && d.mfg) break;
   }
+}
+
+// Several OCR passes. Returns { texts: used for dates + name, nameOnly: rotated passes, used only for the name }.
+async function scanPasses(file) {
+  const texts = [], nameOnly = [];
+  const worker = await Tesseract.createWorker("eng");
+  const say = m => { scanStatus.textContent = m; };
+  const done = () => { const d = parseDates(texts.join("\n")); return d.exp && d.mfg && matchAny(texts.concat(nameOnly)); };
+  const full = async (scale, psm, label) => {
+    say(label);
+    try {
+      await worker.setParameters({ tessedit_pageseg_mode: psm });
+      texts.push((await worker.recognize(await colorImage(file, scale))).data.text || "");
+    } catch (e) { /* skip a failed pass */ }
+  };
+  try {
+    await full(2, "6", "Reading the label...");
+    if (!done()) {
+      const d = parseDates(texts.join("\n"));
+      if (!(d.exp && d.mfg)) { try { await bandPass(file, worker, texts, say); } catch (e) {} }
+    }
+    if (!matchAny(texts.concat(nameOnly))) {
+      for (const deg of [90, 270]) {                       // brand names are often printed sideways on strips
+        say("Checking the label from another angle...");
+        try {
+          await worker.setParameters({ tessedit_pageseg_mode: "6" });
+          nameOnly.push((await worker.recognize(await rotatedImage(file, deg, 2))).data.text || "");
+        } catch (e) {}
+        if (matchAny(nameOnly)) break;
+      }
+    }
+    for (const [sc, psm] of [[3, "6"], [3, "11"]]) {        // extra passes only if something is still missing
+      if (done()) break;
+      await full(sc, psm, "Reading the label again...");
+    }
+  } finally { await worker.terminate(); }
+  return { texts, nameOnly };
+}
+
+function buildResult(texts, nameOnly = []) {
+  let matched = null, batch = "unknown";
+  for (const t of texts.concat(nameOnly)) { if (!matched) matched = matchMedicine(t); }
+  for (const t of texts) { if (batch === "unknown") batch = extractBatch(t); }
   const d = parseDates(texts.join("\n"));                 // combine dates found across all passes
   const r = {
     name: matched ? matched.name : "Unrecognised label",
     batch,
     mfg: d.mfg ? d.mfg.label : "not detected",
     expiry: d.exp ? d.exp.label : "not detected",
-    note: d.unsure ? "Found " + d.unsure.label + " on the pack but could not tell if it is the manufacture or expiry date. Please set both below." : "",
-    ocrText: texts.join("\n-----\n")
+    note: d.note || "",
+    ocrText: texts.concat(nameOnly).join("\n-----\n")
   };
   r.status = statusFor(r);
   return r;
@@ -176,9 +257,9 @@ async function handleScanFile(file) {
     return;
   }
   try {
-    const texts = await scanPasses(file);
+    const { texts, nameOnly } = await scanPasses(file);
     scanStatus.textContent = "";
-    const result = buildResult(texts);
+    const result = buildResult(texts, nameOnly);
     currentScan = result;
     renderScanResult(result);
   } catch (e) {

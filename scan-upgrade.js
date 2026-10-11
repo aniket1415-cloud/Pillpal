@@ -13,8 +13,8 @@ const MED_LIST = [
   ["Cetirizine", ["cetirizine", "cetzine", "okacet", "alerid"]],
   ["Levocetirizine", ["levocetirizine", "levocet", "xyzal"]],
   ["Azithromycin", ["azithromycin", "azithral", "azee", "zithromax"]],
-  ["Pantoprazole + Domperidone", [], /\bPAN[\s\-]?D\b/i],
-  ["Pantoprazole", ["pantoprazole", "pantocid", "pantop"]],
+  ["Pantoprazole + Domperidone", [], /\bPAN[\s\-\u2013\u2014]*(?:D\b|0\b|\[[\s1Il|D]*\]|\[\)|\|\)|I\)|\]|\(\))/i],
+  ["Pantoprazole", ["pantoprazole", "pantocid", "pantop"], /\bPAN[\s\-]*(?:40|20)\b/i],
   ["Omeprazole", ["omeprazole", "omez", "prilosec"]],
   ["Rabeprazole", ["rabeprazole", "razo"]],
   ["Amlodipine", ["amlodipine", "amlodac", "norvasc"]],
@@ -88,6 +88,8 @@ function parseDates(text) {
   let t = text.toUpperCase();
   t = t.replace(/\b(FE[RA8H]|JAM|AUC|SFP|DFC)(?=[\s.:\/\-]*'?\d)/g,
     w => ({ FER: "FEB", FEA: "FEB", FE8: "FEB", FEH: "FEB", JAM: "JAN", AUC: "AUG", SFP: "SEP", DFC: "DEC" })[w]);   // common OCR slips
+  t = t.replace(/[)\]|!1I0O]UL(?=[\s.:\/\-]*'?\d)/g, "JUL");           // ")UL", "1UL", "0UL" are JUL
+  t = t.replace(/[E\u00A3]\s*[%\u00D7X]\s*P(?=[.\s:])/g, "EXP");     // "\u00A3%P." is EXP.
   let found = [];
   const tagAt = i => {
     const before = t.slice(Math.max(0, i - 12), i);
@@ -276,8 +278,9 @@ function badgeHtml(status) {
   const label = status === "verified" ? "Name matched, in date"
     : status === "expired" ? "Expired"
     : status === "noexpiry" ? "Name matched, expiry not read"
+    : status === "entered" ? "Details entered by you"
     : "Not found in database";
-  const cls = status === "noexpiry" ? "unverified" : status;
+  const cls = (status === "noexpiry" || status === "entered") ? "unverified" : status;
   return '<span class="badge ' + cls + '">' + label + "</span>";
 }
 
@@ -301,9 +304,9 @@ const fromInput = v => { const m = /^(\d{4})-(\d{2})$/.exec(v); return m ? m[2] 
 function statusFor(r) {
   const m = /^(\d{2})\/(\d{4})$/.exec(r.expiry);
   const exp = m ? new Date(+m[2], +m[1], 0) : null;
-  const matched = r.name !== "Unrecognised label";
   if (exp && exp < new Date()) return "expired";
-  if (matched) return exp ? "verified" : "noexpiry";
+  if (r.manual) return "entered";                          // name typed by the user, not in our list
+  if (r.name !== "Unrecognised label") return exp ? "verified" : "noexpiry";
   return "unverified";
 }
 
@@ -313,6 +316,10 @@ function renderScanResult(r) {
   const missing = r.mfg === "not detected" || r.expiry === "not detected";
   el.innerHTML =
     '<div class="result-card"><div class="row"><div class="name">' + esc(r.name) + "</div>" + badgeHtml(r.status) + "</div>" +
+    ((r.name === "Unrecognised label" || r.manual) ?
+      '<div class="form" style="margin-top:10px;"><label for="nameIn">' + (r.manual ? "Medicine name (entered by you)" : "Not recognised. Type the medicine name from the pack:") + '</label>' +
+      '<input id="nameIn" list="medNames" placeholder="e.g. Pan-D, Dolo 650" value="' + esc(r.manual ? r.name : "") + '" />' +
+      '<datalist id="medNames">' + MED_LIST.map(x => '<option value="' + esc(x[0]) + '">').join("") + "</datalist></div>" : "") +
     '<div class="meta">Batch: ' + esc(r.batch) + "</div>" +
     (r.note ? '<div class="meta" style="margin-top:6px;color:var(--amber);">' + esc(r.note) + "</div>" : "") +
     (missing ? '<div class="meta" style="margin:10px 0 6px;color:var(--amber);">Dates not fully read from the photo. Enter them from the pack:</div>' : '<div class="meta" style="margin:10px 0 6px;">Dates (tap to correct if wrong):</div>') +
@@ -326,7 +333,16 @@ function renderScanResult(r) {
     r.expiry = fromInput(document.getElementById("expIn").value);
     r.note = "";
     r.status = statusFor(r);
-    renderScanResult(r);
+    setTimeout(() => renderScanResult(r), 0);
+  };
+  const nameIn = document.getElementById("nameIn");
+  if (nameIn) nameIn.onchange = () => {
+    const v = nameIn.value.trim();
+    const known = v ? matchMedicine(v) : null;             // typing "Pan-D" or "Dolo" maps to the known medicine
+    r.name = known ? known.name : (v || "Unrecognised label");
+    r.manual = !!v && !known;
+    r.status = statusFor(r);
+    setTimeout(() => renderScanResult(r), 0);              // redraw after the input finishes its own events
   };
   document.getElementById("mfgIn").onchange = onDate;
   document.getElementById("expIn").onchange = onDate;

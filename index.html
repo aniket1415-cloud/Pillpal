@@ -105,6 +105,7 @@
   .install-banner{background:var(--mint-bg);border:1px solid #BFE3DE;border-radius:14px;padding:12px 14px;margin-bottom:16px;font-size:12.5px;color:var(--teal-dark);display:none;}
   .install-banner.show{display:block;}
 </style>
+   <link rel="stylesheet" href="theme.css" />
 </head>
 <body>
 <div id="app">
@@ -502,6 +503,6 @@ document.getElementById("signOutBtn").onclick = async () => {
   if (session) enterApp(); else overlay.style.display = "flex";
 })();
 </script>
-<script src="scan-upgrade.js"></script> 
+  <script src="scan-upgrade.js"></script> 
 </body>
 </html>

@@ -81,7 +81,7 @@ function fmtDate(y, mo) { return { label: String(mo).padStart(2, "0") + "/" + y,
 // Finds manufacture and expiry dates. Uses EXP / MFG words when readable, otherwise
 // earlier date on the pack = manufactured, later date = expiry.
 function parseDates(text) {
-  const t = text.toUpperCase(), found = [];
+  const t = text.toUpperCase(); let found = [];
   const add = (m, y, mo) => {
     if (y < 100) { if (y < 15 || y > 45) return; y += 2000; }
     if (y < 2015 || y > 2060 || !mo) return;
@@ -94,20 +94,23 @@ function parseDates(text) {
   while ((m = r1.exec(t))) add(m, +m[2], +m[1]);
   const r2 = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[\s.:\/\-]*'?(20\d{2}|\d{2})\b/g;
   while ((m = r2.exec(t))) add(m, +m[2], MONTHS[m[1]]);
-  if (!found.length) return { mfg: null, exp: null };
-  found.sort((a, b) => a.key - b.key);
+  if (!found.length) return { mfg: null, exp: null, unsure: null };
+  const uniq = new Map();                                  // same date seen in several passes counts once
+  for (const f of found) { const e = uniq.get(f.key); if (!e) uniq.set(f.key, f); else if (!e.tag && f.tag) e.tag = f.tag; }
+  found = [...uniq.values()].sort((a, b) => a.key - b.key);
+  let unsure = null;
   let exp = found.find(f => f.tag === "exp");
   let mfg = found.find(f => f.tag === "mfg");
   if (!exp && !mfg) {
     if (found.length >= 2) { mfg = found[0]; exp = found[found.length - 1]; }
-    else exp = found[0];                                  // single untagged date: treat as expiry
+    else unsure = found[0];                               // one date, no EXP/MFG label: do not guess
   } else if (!exp && found.length >= 2) {
     exp = found.filter(f => f !== mfg).pop();
   } else if (!mfg && found.length >= 2) {
     mfg = found.filter(f => f !== exp)[0];
   }
   if (mfg && exp && mfg.key >= exp.key) mfg = null;
-  return { mfg: mfg ? fmtDate(mfg.y, mfg.mo) : null, exp: exp ? fmtDate(exp.y, exp.mo) : null };
+  return { mfg: mfg ? fmtDate(mfg.y, mfg.mo) : null, exp: exp ? fmtDate(exp.y, exp.mo) : null, unsure: unsure ? fmtDate(unsure.y, unsure.mo) : null };
 }
 function parseExpiry(text) { return parseDates(text).exp; }
 
@@ -134,7 +137,7 @@ async function scanPasses(file) {
         await worker.setParameters({ tessedit_pageseg_mode: plan[i][1] });
         const t = (await worker.recognize(img)).data.text || "";
         texts.push(t);
-        const d = parseDates(t);
+        const d = parseDates(texts.join("\n"));
         if (d.exp && d.mfg && matchMedicine(texts.join(" "))) break;
       } catch (e) { /* skip a failed pass */ }
     }
@@ -143,19 +146,19 @@ async function scanPasses(file) {
 }
 
 function buildResult(texts) {
-  let matched = null, best = null, bestScore = -1, bestText = texts[0] || "", batch = "unknown";
+  let matched = null, batch = "unknown";
   for (const t of texts) {
     if (!matched) matched = matchMedicine(t);
     if (batch === "unknown") batch = extractBatch(t.toUpperCase());
-    const d = parseDates(t), sc = (d.exp ? 2 : 0) + (d.mfg ? 1 : 0);
-    if (sc > bestScore) { bestScore = sc; best = d; bestText = t; }
   }
+  const d = parseDates(texts.join("\n"));                 // combine dates found across all passes
   const r = {
     name: matched ? matched.name : "Unrecognised label",
     batch,
-    mfg: best && best.mfg ? best.mfg.label : "not detected",
-    expiry: best && best.exp ? best.exp.label : "not detected",
-    ocrText: bestText
+    mfg: d.mfg ? d.mfg.label : "not detected",
+    expiry: d.exp ? d.exp.label : "not detected",
+    note: d.unsure ? "Found " + d.unsure.label + " on the pack but could not tell if it is the manufacture or expiry date. Please set both below." : "",
+    ocrText: texts.join("\n-----\n")
   };
   r.status = statusFor(r);
   return r;
@@ -230,15 +233,17 @@ function renderScanResult(r) {
   el.innerHTML =
     '<div class="result-card"><div class="row"><div class="name">' + esc(r.name) + "</div>" + badgeHtml(r.status) + "</div>" +
     '<div class="meta">Batch: ' + esc(r.batch) + "</div>" +
+    (r.note ? '<div class="meta" style="margin-top:6px;color:var(--amber);">' + esc(r.note) + "</div>" : "") +
     (missing ? '<div class="meta" style="margin:10px 0 6px;color:var(--amber);">Dates not fully read from the photo. Enter them from the pack:</div>' : '<div class="meta" style="margin:10px 0 6px;">Dates (tap to correct if wrong):</div>') +
     '<div class="form-row form"><div><label for="mfgIn">Manufactured</label><input type="month" id="mfgIn" value="' + toInput(r.mfg) + '" /></div>' +
     '<div><label for="expIn">Expires</label><input type="month" id="expIn" value="' + toInput(r.expiry) + '" /></div></div>' +
     '<button class="ghost" id="toggleOcrBtn">' + (wasOpen ? "Hide scanned text" : "Show scanned text") + "</button>" +
-    '<div class="ocr" id="ocrBox" style="display:' + (wasOpen ? "block" : "none") + ';">' + esc(r.ocrText.trim().slice(0, 400) || "none") + "</div>" +
+    '<div class="ocr" id="ocrBox" style="display:' + (wasOpen ? "block" : "none") + ';">' + esc(r.ocrText.trim().slice(0, 900) || "none") + "</div>" +
     '<button class="primary" style="margin-top:12px;" id="saveVaultBtn">Save to vault</button></div>';
   const onDate = () => {
     r.mfg = fromInput(document.getElementById("mfgIn").value);
     r.expiry = fromInput(document.getElementById("expIn").value);
+    r.note = "";
     r.status = statusFor(r);
     renderScanResult(r);
   };

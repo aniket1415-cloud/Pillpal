@@ -111,32 +111,54 @@ function parseDates(text) {
 }
 function parseExpiry(text) { return parseDates(text).exp; }
 
-async function prepImage(file, maxScale = 2, maxDim = 2000) {
+// Colour upscale only. (Grayscale/contrast-stretch made small foil print LESS readable in testing.)
+async function colorImage(file, scale) {
   const img = await createImageBitmap(file);
-  const scale = Math.min(maxScale, maxDim / Math.max(img.width, img.height));
+  const s = Math.min(scale, 3200 / Math.max(img.width, img.height));
   const c = document.createElement("canvas");
-  c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-  const ctx = c.getContext("2d");
-  ctx.drawImage(img, 0, 0, c.width, c.height);
-  const d = ctx.getImageData(0, 0, c.width, c.height), p = d.data;
-  let lo = 255, hi = 0;
-  for (let i = 0; i < p.length; i += 4) {
-    const g = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
-    p[i] = p[i + 1] = p[i + 2] = g; if (g < lo) lo = g; if (g > hi) hi = g;
-  }
-  const range = Math.max(hi - lo, 1);
-  for (let i = 0; i < p.length; i += 4) { const v = ((p[i] - lo) / range) * 255; p[i] = p[i + 1] = p[i + 2] = v; }
-  ctx.putImageData(d, 0, 0);
+  c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
   return c;
 }
 
-async function ocrOnce(src, sparse) {
-  if (!sparse) return (await Tesseract.recognize(src, "eng")).data.text;
-  const w = await Tesseract.createWorker("eng");     // sparse mode finds scattered small text (dates on packs)
+// Several OCR passes with different image sizes / page modes; stops early once both dates are found.
+async function scanPasses(file) {
+  const plan = [[2, "6"], [3, "6"], [3, "11"], [2, "3"], [3, "3"]];
+  const texts = [];
+  const worker = await Tesseract.createWorker("eng");
   try {
-    await w.setParameters({ tessedit_pageseg_mode: "11" });
-    return (await w.recognize(src)).data.text;
-  } finally { await w.terminate(); }
+    for (let i = 0; i < plan.length; i++) {
+      scanStatus.textContent = "Reading the label (" + (i + 1) + "/" + plan.length + ")...";
+      try {
+        const img = await colorImage(file, plan[i][0]);
+        await worker.setParameters({ tessedit_pageseg_mode: plan[i][1] });
+        const t = (await worker.recognize(img)).data.text || "";
+        texts.push(t);
+        const d = parseDates(t);
+        if (d.exp && d.mfg && matchMedicine(texts.join(" "))) break;
+      } catch (e) { /* skip a failed pass */ }
+    }
+  } finally { await worker.terminate(); }
+  return texts;
+}
+
+function buildResult(texts) {
+  let matched = null, best = null, bestScore = -1, bestText = texts[0] || "", batch = "unknown";
+  for (const t of texts) {
+    if (!matched) matched = matchMedicine(t);
+    if (batch === "unknown") batch = extractBatch(t.toUpperCase());
+    const d = parseDates(t), sc = (d.exp ? 2 : 0) + (d.mfg ? 1 : 0);
+    if (sc > bestScore) { bestScore = sc; best = d; bestText = t; }
+  }
+  const r = {
+    name: matched ? matched.name : "Unrecognised label",
+    batch,
+    mfg: best && best.mfg ? best.mfg.label : "not detected",
+    expiry: best && best.exp ? best.exp.label : "not detected",
+    ocrText: bestText
+  };
+  r.status = statusFor(r);
+  return r;
 }
 
 async function handleScanFile(file) {
@@ -151,17 +173,9 @@ async function handleScanFile(file) {
     return;
   }
   try {
-    const c1 = await prepImage(file).catch(() => file);
-    let text = await ocrOnce(c1, false);
-    if (!parseDates(text).exp) {
-      scanStatus.textContent = "Looking closer for dates...";
-      try {
-        const c2 = await prepImage(file, 3, 3200).catch(() => file);
-        text += "\n" + await ocrOnce(c2, true);
-      } catch (e) { /* keep first-pass text */ }
-    }
+    const texts = await scanPasses(file);
     scanStatus.textContent = "";
-    const result = runVerification(text || "");
+    const result = buildResult(texts);
     currentScan = result;
     renderScanResult(result);
   } catch (e) {

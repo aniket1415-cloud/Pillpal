@@ -76,19 +76,40 @@ function matchMedicine(text) {
 }
 
 const MONTHS = { JAN:1, FEB:2, MAR:3, APR:4, MAY:5, JUN:6, JUL:7, AUG:8, SEP:9, OCT:10, NOV:11, DEC:12 };
-function parseExpiry(text) {
+function fmtDate(y, mo) { return { label: String(mo).padStart(2, "0") + "/" + y, date: new Date(y, mo, 0), y, mo }; }
+
+// Finds manufacture and expiry dates. Uses EXP / MFG words when readable, otherwise
+// earlier date on the pack = manufactured, later date = expiry.
+function parseDates(text) {
   const t = text.toUpperCase(), found = [];
+  const add = (m, y, mo) => {
+    if (y < 100) { if (y < 15 || y > 45) return; y += 2000; }
+    if (y < 2015 || y > 2060 || !mo) return;
+    const before = t.slice(Math.max(0, m.index - 12), m.index);
+    const tag = /EXP|USE BEFORE|BEST BEFORE/.test(before) ? "exp" : /MFG|MFD|MF\.|MANUF/.test(before) ? "mfg" : "";
+    found.push({ y, mo, tag, key: y * 12 + mo });
+  };
   let m;
   const r1 = /(0[1-9]|1[0-2])\s*[\/\-\.]\s*(20\d{2}|\d{2})\b/g;
-  while ((m = r1.exec(t))) { let y = +m[2]; if (y < 100) y += 2000; found.push([y, +m[1]]); }
+  while ((m = r1.exec(t))) add(m, +m[2], +m[1]);
   const r2 = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[\s.:\/\-]*'?(20\d{2}|\d{2})\b/g;
-  while ((m = r2.exec(t))) { let y = +m[2]; if (y < 100) y += 2000; found.push([y, MONTHS[m[1]]]); }
-  const ok = found.filter(([y]) => y >= 2015 && y <= 2060);
-  if (!ok.length) return null;
-  ok.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const [y, mo] = ok[ok.length - 1];       // latest date on the pack = expiry (earlier one is usually manufacture date)
-  return { label: String(mo).padStart(2, "0") + "/" + y, date: new Date(y, mo, 0) };
+  while ((m = r2.exec(t))) add(m, +m[2], MONTHS[m[1]]);
+  if (!found.length) return { mfg: null, exp: null };
+  found.sort((a, b) => a.key - b.key);
+  let exp = found.find(f => f.tag === "exp");
+  let mfg = found.find(f => f.tag === "mfg");
+  if (!exp && !mfg) {
+    if (found.length >= 2) { mfg = found[0]; exp = found[found.length - 1]; }
+    else exp = found[0];                                  // single untagged date: treat as expiry
+  } else if (!exp && found.length >= 2) {
+    exp = found.filter(f => f !== mfg).pop();
+  } else if (!mfg && found.length >= 2) {
+    mfg = found.filter(f => f !== exp)[0];
+  }
+  if (mfg && exp && mfg.key >= exp.key) mfg = null;
+  return { mfg: mfg ? fmtDate(mfg.y, mfg.mo) : null, exp: exp ? fmtDate(exp.y, exp.mo) : null };
 }
+function parseExpiry(text) { return parseDates(text).exp; }
 
 async function prepImage(file) {
   const img = await createImageBitmap(file);
@@ -129,4 +150,87 @@ function handleScanFile(file) {
       renderScanResult(result);
     })
     .catch(() => { scanStatus.textContent = "Could not read the label. Try a clearer, closer photo."; });
+}
+
+
+// ---------- Result card, vault and verification (adds manufactured date + "Show scanned text") ----------
+const _style = document.createElement("style");
+_style.textContent = ".result-card .meta b{color:var(--ink);} .result-card .meta{margin-bottom:2px;}";
+document.head.appendChild(_style);
+
+function badgeHtml(status) {
+  const label = status === "verified" ? "Name matched, in date"
+    : status === "expired" ? "Expired"
+    : status === "noexpiry" ? "Name matched, expiry not read"
+    : "Not found in database";
+  const cls = status === "noexpiry" ? "unverified" : status;
+  return '<span class="badge ' + cls + '">' + label + "</span>";
+}
+
+function runVerification(ocrText) {
+  const matched = matchMedicine(ocrText);
+  const d = parseDates(ocrText);
+  let status = "unverified";
+  if (d.exp && d.exp.date < new Date()) status = "expired";
+  else if (matched) status = d.exp ? "verified" : "noexpiry";
+  return {
+    name: matched ? matched.name : "Unrecognised label",
+    batch: extractBatch(ocrText.toUpperCase()),
+    mfg: d.mfg ? d.mfg.label : "not detected",
+    expiry: d.exp ? d.exp.label : "not detected",
+    status, ocrText
+  };
+}
+
+function renderScanResult(r) {
+  const el = document.getElementById("scanResult");
+  el.innerHTML =
+    '<div class="result-card"><div class="row"><div class="name">' + esc(r.name) + "</div>" + badgeHtml(r.status) + "</div>" +
+    '<div class="meta">Manufactured: <b>' + esc(r.mfg) + "</b></div>" +
+    '<div class="meta">Expires: <b>' + esc(r.expiry) + "</b></div>" +
+    '<div class="meta">Batch: ' + esc(r.batch) + "</div>" +
+    '<button class="ghost" id="toggleOcrBtn" style="margin-top:12px;">Show scanned text</button>' +
+    '<div class="ocr" id="ocrBox" style="display:none;">' + esc(r.ocrText.trim().slice(0, 400) || "none") + "</div>" +
+    '<button class="primary" style="margin-top:12px;" id="saveVaultBtn">Save to vault</button></div>';
+  document.getElementById("toggleOcrBtn").onclick = function () {
+    const box = document.getElementById("ocrBox");
+    const show = box.style.display === "none";
+    box.style.display = show ? "block" : "none";
+    this.textContent = show ? "Hide scanned text" : "Show scanned text";
+  };
+  document.getElementById("saveVaultBtn").onclick = async function () {
+    const row = { name: r.name, batch: r.batch, expiry: r.expiry, mfg: r.mfg, status: r.status };
+    let res = await sb.from("medicines").insert(row).select().single();
+    if (res.error) {                                   // fallback if the "mfg" column hasn't been added yet
+      delete row.mfg;
+      res = await sb.from("medicines").insert(row).select().single();
+    }
+    if (res.error) return showToast("Could not save");
+    vault.push({ id: res.data.id, name: r.name, batch: r.batch, expiry: r.expiry, mfg: res.data.mfg || r.mfg, status: r.status });
+    renderVault(); renderHome();
+    showToast("Saved to vault");
+  };
+}
+
+function renderVault() {
+  const el = document.getElementById("vaultList");
+  if (!vault.length) {
+    el.innerHTML = '<div class="empty">No saved medicines yet. Scan one to add it here.</div>';
+    return;
+  }
+  el.innerHTML = vault.map((v, i) =>
+    '<div class="list-item"><div><div class="name">' + esc(v.name) + '</div><div class="meta">Mfg ' + esc(v.mfg || "not detected") +
+    " &middot; Exp " + esc(v.expiry) + " &middot; Batch " + esc(v.batch) + '</div></div><div style="display:flex;align-items:center;gap:8px;">' + badgeHtml(v.status) +
+    '<button class="small" onclick="deleteVault(' + i + ')" aria-label="Remove"><svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div></div>'
+  ).join("");
+}
+
+async function loadCloud() {
+  const [m, r] = await Promise.all([
+    sb.from("medicines").select("*").order("created_at"),
+    sb.from("reminders").select("*").order("time")
+  ]);
+  vault = (m.data || []).map(x => ({ id: x.id, name: x.name, batch: x.batch, expiry: x.expiry, mfg: x.mfg, status: x.status }));
+  reminders = (r.data || []).map(x => ({ id: x.id, medicine: x.medicine_name, time: x.time, freq: x.frequency }));
+  renderHome(); renderReminders(); renderVault();
 }
